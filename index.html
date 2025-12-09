@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <!-- 뷰포트 설정: 모바일에서 터치 확대 방지 및 앱 스타일 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <!-- PWA 설정: 매니페스트 연결 -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#000000">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    
+    <title>Pic Viewer v3</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        /* === 기본 스타일 === */
+        html { background-color: #000000; height: 100%; touch-action: pan-x pan-y; }
+        body { background-color: #000000; color: #e0e0e0; font-family: sans-serif; margin: 0; padding: 0; height: 100%; overscroll-behavior-y: none; user-select: none; -webkit-user-select: none; }
+        .main-wrapper {
+            background-color: #000000; min-height: 100%; padding: 5px; padding-bottom: 100px; box-sizing: border-box;
+        }
+        * { box-sizing: border-box; }
+        
+        /* === 상단 컨트롤 패널 === */
+        .control-panel {
+            text-align: center; margin-bottom: 10px; padding: 10px;
+            background-color: #1e1e1e; border-radius: 8px; border: 1px solid #333;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            position: sticky; top: 0; z-index: 100;
+        }
+        .nav-bar {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #333;
+        }
+        .nav-title { font-size: 0.85rem; font-weight: bold; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+        
+        .btn-primary { display: inline-block; padding: 10px 20px; cursor: pointer; background-color: #0d6efd; color: white; border-radius: 6px; border:none; font-weight: bold; font-size: 0.9rem; }
+        .btn-secondary { background-color: #444; color: white; border: 1px solid #666; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
+        .btn-danger { background-color: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+        .cache-info { font-size: 0.75rem; color: #888; margin-top: 5px; display: flex; align-items: center; justify-content: center; gap: 10px;}
+        input[type="file"] { display: none; }
+
+        /* === 그리드 리스트 (세로 4열, 가로 8열) === */
+        .container { display: grid; gap: 4px; max-width: 100%; margin: 0 auto; grid-template-columns: repeat(4, 1fr); }
+        @media (orientation: landscape) { .container { grid-template-columns: repeat(8, 1fr); } }
+        
+        .item {
+            background-color: #1e1e1e; border-radius: 4px; overflow: hidden;
+            padding: 2px; text-align: center; position: relative;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.3); border: 1px solid #333;
+            display: flex; flex-direction: column; aspect-ratio: 3 / 4; cursor: pointer;
+        }
+        .folder-item { background-color: #252525; border-color: #555; }
+        .folder-icon { font-size: 2rem; color: #ffc107; flex-grow: 1; display: flex; align-items: center; justify-content: center; }
+        .filename { font-size: 0.65rem; font-weight: bold; margin-top: 2px; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; padding: 2px; }
+        .thumb-container { flex-grow: 1; width: 100%; background-color: #000; border-radius: 2px; overflow: hidden; position: relative; display: flex; align-items: center; justify-content: center; }
+        .thumb-img { width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.3s; }
+        .thumb-img.loaded { opacity: 1; }
+        .badge-type { position: absolute; top: 2px; right: 2px; padding: 1px 3px; background-color: rgba(0,0,0,0.7); color: #fff; border-radius: 3px; font-size: 0.55rem; font-weight: bold; z-index: 10; pointer-events: none; }
+        .badge-zip { color: #ffc107; border: 1px solid #ffc107; }
+        
+        /* === 뷰어 모달 === */
+        .modal-overlay { display: none; position: fixed; top: 0; bottom: 0; left: 0; right: 0; width: 100%; height: 100%; background-color: #000; z-index: 2000; overflow: hidden; }
+        .viewer-wrapper { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; position: relative; overflow: hidden; }
+        #zoomContainer { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: visible; touch-action: none; }
+        #mainImage { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center center; will-change: transform; }
+        
+        .viewer-bar { position: absolute; top: 0; left: 0; width: 100%; padding: 10px; background: linear-gradient(to bottom, rgba(0,0,0,0.8) 0%, rgba(0,0,0,0) 100%); color: #fff; display: flex; justify-content: space-between; z-index: 2020; pointer-events: none; }
+        .viewer-bar button { pointer-events: auto; }
+        .viewer-title { font-size: 0.9rem; font-weight: bold; text-shadow: 1px 1px 2px #000; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 70%; }
+        .close-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
+
+        /* 하단 툴바 */
+        .bottom-toolbar {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(20, 20, 20, 0.85); backdrop-filter: blur(10px);
+            padding: 8px 10px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.15);
+            display: flex; flex-direction: column; gap: 5px; z-index: 2020; pointer-events: auto;
+            justify-content: center; align-items: center; width: 90%; max-width: 400px;
+        }
+        .tool-row { display: flex; justify-content: space-between; width: 100%; gap: 5px; }
+        
+        .tool-btn {
+            background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.1); 
+            color: rgba(255,255,255,0.9); border-radius: 8px;
+            font-size: 1.1rem; cursor: pointer; padding: 8px 0; 
+            flex-grow: 1; display: flex; align-items: center; justify-content: center;
+        }
+        .tool-btn:active { background: rgba(255,255,255,0.2); transform: scale(0.98); }
+        .tool-text { font-size: 0.6rem; font-weight: bold; margin-left: 2px; color: #bbb; }
+
+        /* 클릭 존 (PC 등 터치 안될 때 보조용) */
+        .click-zone { position: absolute; top: 0; height: 100%; width: 15%; z-index: 2010; cursor: pointer; }
+        .zone-left { left: 0; }
+        .zone-right { right: 0; }
+        
+        .page-counter { position: absolute; bottom: 100px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.5); padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; color: #ddd; pointer-events: none; z-index: 2020; }
+        .feedback-msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.7); color: white; padding: 15px 25px; border-radius: 10px; font-size: 1.2rem; font-weight: bold; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 2050; }
+    </style>
+</head>
+<body>
+    <div class="main-wrapper">
+        <div class="control-panel">
+            <div id="navArea" class="nav-bar" style="display:none;">
+                <button class="btn-secondary" onclick="navigateUp()">⬅️ 상위</button>
+                <div id="currentPathDisplay" class="nav-title">/</div>
+            </div>
+            <div id="uploadArea">
+                <label for="folder-upload" class="btn-primary">📂 폴더 열기 (Select Folder)</label>
+                <input id="folder-upload" type="file" webkitdirectory directory multiple />
+            </div>
+            <div class="cache-info">
+                <span id="cacheStatus">썸네일 캐시 확인 중...</span>
+                <button class="btn-danger" onclick="clearThumbnailCache()">🗑️ 삭제</button>
+            </div>
+        </div>
+        <div id="gallery" class="container"></div>
+    </div>
+
+    <!-- 뷰어 모달 -->
+    <div id="viewerModal" class="modal-overlay">
+        <div class="viewer-wrapper">
+            <div class="viewer-bar">
+                <span id="viewerTitle" class="viewer-title"></span>
+                <button class="close-btn" onclick="closeViewer()">✕</button>
+            </div>
+            
+            <div id="zoomContainer">
+                <img id="mainImage" src="" alt="" />
+            </div>
+
+            <div id="pageCounter" class="page-counter"></div>
+            <div id="feedbackMsg" class="feedback-msg"></div>
+            
+            <div class="click-zone zone-left" onclick="prevPage()"></div>
+            <div class="click-zone zone-right" onclick="nextPage()"></div>
+
+            <div class="bottom-toolbar">
+                <!-- 1열: 기능 버튼 -->
+                <div class="tool-row">
+                    <button class="tool-btn" onclick="rotate(-90)">↺ 회전</button>
+                    <button class="tool-btn" onclick="rotate(90)">↻ 회전</button>
+                </div>
+                <!-- 2열: 네비게이션 -->
+                <div class="tool-row">
+                    <button class="tool-btn" onclick="goToFirst()">⏮</button>
+                    <button class="tool-btn" onclick="jumpPage(-10)">-10</button>
+                    <button class="tool-btn" onclick="prevPage()">◀</button>
+                    <button class="tool-btn" onclick="nextPage()">▶</button>
+                    <button class="tool-btn" onclick="jumpPage(10)">+10</button>
+                    <button class="tool-btn" onclick="goToLast()">⏭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // === IndexedDB Setup ===
+        const DB_NAME = 'GalleryThumbDB';
+        const STORE_NAME = 'thumbnails';
+        let db;
+        const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|bmp|nep)$/i;
+
+        function initDB() {
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = e => { if(!e.target.result.objectStoreNames.contains(STORE_NAME)) e.target.result.createObjectStore(STORE_NAME); };
+            req.onsuccess = e => { db = e.target.result; updateCacheStatus(); };
+        }
+        initDB();
+
+        function getCacheKey(f) { return `${f.name}_${f.size}_${f.lastModified}`; }
+        async function saveToCache(k, b) { if(db) db.transaction(STORE_NAME,'readwrite').objectStore(STORE_NAME).put(b, k); }
+        async function getFromCache(k) {
+            if(!db) return null;
+            return new Promise(r => {
+                const req = db.transaction(STORE_NAME,'readonly').objectStore(STORE_NAME).get(k);
+                req.onsuccess = () => r(req.result); req.onerror = () => r(null);
+            });
+        }
+        function clearThumbnailCache() {
+            if(!confirm("캐시를 모두 삭제하시겠습니까?")) return;
+            const tx = db.transaction(STORE_NAME,'readwrite');
+            tx.objectStore(STORE_NAME).clear();
+            tx.oncomplete = () => { alert("삭제됨"); location.reload(); };
+        }
+        function updateCacheStatus() {
+            if(!db) return;
+            const req = db.transaction(STORE_NAME,'readonly').objectStore(STORE_NAME).count();
+            req.onsuccess = () => document.getElementById('cacheStatus').innerText = `저장된 썸네일: ${req.result}개`;
+        }
+
+        // === 썸네일 로직 ===
+        async function createResizedThumbnail(blob) {
+            return new Promise(resolve => {
+                const img = new Image();
+                const url = URL.createObjectURL(blob);
+                img.onload = () => {
+                    const canvas = document.createElement('canvas');
+                    const MAX_W = 240;
+                    const scale = MAX_W / img.width;
+                    canvas.width = MAX_W; canvas.height = img.height * scale;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                    canvas.toBlob(b => { URL.revokeObjectURL(url); resolve(b); }, 'image/jpeg', 0.7);
+                };
+                img.src = url;
+            });
+        }
+        async function createSplitThumbnail(blob1, blob2) {
+            return new Promise((resolve, reject) => {
+                const img1 = new Image(), img2 = new Image();
+                const u1 = URL.createObjectURL(blob1), u2 = URL.createObjectURL(blob2);
+                let loaded = 0;
+                const check = () => { loaded++; if(loaded===2) draw(); };
+                img1.onload = check; img2.onload = check;
+                img1.src = u1; img2.src = u2;
+                function draw() {
+                    const cvs = document.createElement('canvas');
+                    cvs.width = 240; cvs.height = 320;
+                    const ctx = cvs.getContext('2d');
+                    drawCover(ctx, img1, 0, 0, 120, 320);
+                    drawCover(ctx, img2, 120, 0, 120, 320);
+                    ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.fillRect(119, 0, 2, 320);
+                    cvs.toBlob(b => { URL.revokeObjectURL(u1); URL.revokeObjectURL(u2); resolve(b); }, 'image/jpeg', 0.7);
+                }
+                function drawCover(ctx, img, x, y, w, h) {
+                    const sr = img.width/img.height, dr = w/h;
+                    let sx, sy, sw, sh;
+                    if(sr > dr) { sh = img.height; sw = sh * dr; sy = 0; sx = (img.width-sw)/2; }
+                    else { sw = img.width; sh = sw / dr; sx = 0; sy = (img.height-sh)/2; }
+                    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
+                }
+            });
+        }
+
+        // === 앱 로직 ===
+        let allFiles = [], currentPath = "", viewerList = [], viewerIndex = 0;
+
+        document.getElementById('folder-upload').addEventListener('change', e => {
+            const raw = Array.from(e.target.files);
+            allFiles = raw.filter(f => f.name.match(IMG_EXT) || f.name.toLowerCase().endsWith('.zip'));
+            if(!allFiles.length) return alert("파일이 없습니다.");
+            currentPath = "";
+            document.getElementById('uploadArea').style.display='none';
+            document.getElementById('navArea').style.display='flex';
+            renderGallery();
+        });
+
+        const observer = new IntersectionObserver((entries, obs) => {
+            entries.forEach(e => {
+                if(e.isIntersecting) {
+                    const t = e.target;
+                    const idx = parseInt(t.dataset.index);
+                    if(t.dataset.type === 'zip') loadZipThumb(t, allFiles[idx]);
+                    else loadImgThumb(t, allFiles[idx]);
+                    obs.unobserve(t);
+                }
+            });
+        }, {rootMargin:'100px'});
+
+        function renderGallery() {
+            const gal = document.getElementById('gallery');
+            document.getElementById('currentPathDisplay').innerText = currentPath || "Root";
+            gal.innerHTML = '';
+            
+            const folders = new Set();
+            const files = [];
+
+            allFiles.forEach((f, i) => {
+                const p = f.webkitRelativePath || f.name;
+                if(!p.startsWith(currentPath)) return;
+                const rel = p.substring(currentPath.length);
+                const parts = rel.split('/');
+                if(parts.length > 1) folders.add(parts[0]);
+                else files.push({f, i});
+            });
+
+            Array.from(folders).sort().forEach(n => {
+                gal.insertAdjacentHTML('beforeend', `<div class="item folder-item" onclick="enterFolder('${n}')"><div class="folder-icon">📁</div><div class="filename">${n}</div></div>`);
+            });
+            files.sort((a,b)=>a.f.name.localeCompare(b.f.name, undefined, {numeric:true}));
+            files.forEach(item => {
+                const isZip = item.f.name.toLowerCase().endsWith('.zip');
+                gal.insertAdjacentHTML('beforeend', `<div class="item" onclick="openViewer(${item.i})"><div class="thumb-container lazy-target" data-index="${item.i}" data-type="${isZip?'zip':'img'}">${isZip ? '<div class="badge-type badge-zip">ZIP</div>' : ''}<span style="color:#666; font-size:0.6rem;">...</span></div><div class="filename">${item.f.name}</div></div>`);
+            });
+            document.querySelectorAll('.lazy-target').forEach(el => observer.observe(el));
+        }
+
+        function enterFolder(n) { currentPath += n + "/"; renderGallery(); window.scrollTo(0,0); }
+        function navigateUp() {
+            if(!currentPath) return;
+            const p = currentPath.split('/'); p.pop(); p.pop();
+            currentPath = p.length ? p.join('/')+"/" : "";
+            renderGallery(); window.scrollTo(0,0);
+        }
+
+        async function loadImgThumb(el, file) {
+            const key = getCacheKey(file);
+            const cache = await getFromCache(key);
+            if(cache) { el.innerHTML=`<img src="${URL.createObjectURL(cache)}" class="thumb-img loaded">`; return; }
+            try {
+                const b = await createResizedThumbnail(file);
+                saveToCache(key, b); updateCacheStatus();
+                el.innerHTML=`<img src="${URL.createObjectURL(b)}" class="thumb-img loaded">`;
+            } catch(e){ el.innerText="Err"; }
+        }
+
+        async function loadZipThumb(el, file) {
+            const key = getCacheKey(file);
+            const cache = await getFromCache(key);
+            if(cache) { el.innerHTML=`<div class="badge-type badge-zip">ZIP</div><img src="${URL.createObjectURL(cache)}" class="thumb-img loaded">`; return; }
+            try {
+                const z = await JSZip.loadAsync(file);
+                const is = Object.keys(z.files).filter(n=>!n.startsWith('__') && n.match(IMG_EXT));
+                is.sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
+                if(!is.length) { el.innerText="Empty"; return; }
+                const b1 = await z.file(is[0]).async('blob');
+                let fin;
+                if(is.length > 1) {
+                    const b2 = await z.file(is[is.length-1]).async('blob');
+                    fin = await createSplitThumbnail(b1, b2);
+                } else {
+                    fin = await createResizedThumbnail(b1);
+                }
+                saveToCache(key, fin); updateCacheStatus();
+                el.innerHTML=`<div class="badge-type badge-zip">ZIP</div><img src="${URL.createObjectURL(fin)}" class="thumb-img loaded">`;
+            } catch(e){ el.innerText="Err"; }
+        }
+
+        // === 뷰어 (줌 + 회전 + 스와이프) ===
+        const modal = document.getElementById('viewerModal');
+        const imgEl = document.getElementById('mainImage');
+        const zoomCon = document.getElementById('zoomContainer');
+        const feedbackEl = document.getElementById('feedbackMsg');
+
+        let scale = 1, pointX = 0, pointY = 0, rotation = 0;
+        let startX=0, startY=0, startDist=0, isDragging=false;
+
+        function updateTransform() {
+            imgEl.style.transform = `translate(${pointX}px, ${pointY}px) rotate(${rotation}deg) scale(${scale})`;
+            // 확대 중일 때 클릭 존 숨김 (스와이프/패닝 우선)
+            const zoneDisplay = scale > 1.1 ? 'none' : 'block';
+            document.querySelector('.zone-left').style.display = zoneDisplay;
+            document.querySelector('.zone-right').style.display = zoneDisplay;
+        }
+
+        function rotate(deg) { rotation = (rotation + deg); updateTransform(); showFeedback(`${rotation}°`); }
+
+        // 터치 이벤트 (스와이프 & 줌)
+        zoomCon.addEventListener('touchstart', e => {
+            if(e.touches.length===2) {
+                isDragging=false;
+                startDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+            } else if(e.touches.length===1) {
+                isDragging=true;
+                startX = e.touches[0].pageX; // 절대 좌표 저장
+                startY = e.touches[0].pageY;
+                // 확대 상태일 때만 Pan을 위해 pointX 계산
+                if(scale > 1) {
+                    startX -= pointX; 
+                    startY -= pointY;
+                }
+            }
+        });
+
+        zoomCon.addEventListener('touchmove', e => {
+            if(e.touches.length===2) {
+                e.preventDefault();
+                const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                scale = Math.min(Math.max(1, scale + (dist - startDist)*0.005), 5);
+                startDist = dist; updateTransform();
+            } else if(e.touches.length===1 && isDragging) {
+                if(scale > 1) {
+                    // Pan (이동)
+                    e.preventDefault();
+                    pointX = e.touches[0].pageX - startX;
+                    pointY = e.touches[0].pageY - startY;
+                    updateTransform();
+                }
+            }
+        });
+
+        zoomCon.addEventListener('touchend', e => {
+            // 스와이프 로직 (확대 안 된 상태에서만)
+            if(scale === 1 && isDragging) {
+                const endX = e.changedTouches[0].pageX;
+                const endY = e.changedTouches[0].pageY;
+                const diffX = endX - startX;
+                const diffY = endY - startY;
+
+                // 수평 스와이프 감지 (수직 움직임이 적고, 수평이 50px 이상일 때)
+                if(Math.abs(diffX) > 50 && Math.abs(diffY) < 60) {
+                    if(diffX > 0) prevPage(); // 오른쪽으로 밀면 이전
+                    else nextPage(); // 왼쪽으로 밀면 다음
+                }
+            }
+            
+            isDragging=false;
+            if(scale<1.1) { scale=1; pointX=0; pointY=0; updateTransform(); }
+        });
+        
+        // 더블탭 확대
+        let lastTap=0;
+        zoomCon.addEventListener('touchend', e => {
+            if(new Date().getTime()-lastTap < 300 && e.changedTouches.length===1) {
+                scale = scale>1 ? 1 : 2.5; pointX=0; pointY=0; updateTransform();
+            }
+            lastTap = new Date().getTime();
+        });
+
+        async function openViewer(idx) {
+            const f = allFiles[idx];
+            if(!f) return;
+            viewerIndex=0; viewerList=[]; rotation=0; scale=1; pointX=0; pointY=0;
+            updateTransform(); imgEl.src=""; modal.style.display='block';
+
+            if(f.name.toLowerCase().endsWith('.zip')) {
+                document.getElementById('viewerTitle').innerText = "Loading ZIP...";
+                try {
+                    const z = await JSZip.loadAsync(f);
+                    const n = Object.keys(z.files).filter(x=>!x.startsWith('__')&&x.match(IMG_EXT));
+                    n.sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
+                    viewerList = n.map(x=>({type:'zip', obj:z.file(x)}));
+                    document.getElementById('viewerTitle').innerText = f.name;
+                    showImage(0);
+                } catch(e){ alert("Fail"); closeViewer(); }
+            } else {
+                const fs = allFiles.filter(x=> {
+                    const p = x.webkitRelativePath||x.name;
+                    if(!p.startsWith(currentPath)) return false;
+                    return !p.substring(currentPath.length).includes('/') && !x.name.toLowerCase().endsWith('.zip');
+                }).sort((a,b)=>a.name.localeCompare(b.name, undefined, {numeric:true}));
+                viewerList = fs.map(x=>({type:'file', obj:x}));
+                const find = viewerList.findIndex(x=>x.obj===f);
+                document.getElementById('viewerTitle').innerText = f.name;
+                showImage(find>=0?find:0);
+            }
+        }
+
+        async function showImage(idx) {
+            if(idx<0 || idx>=viewerList.length) return;
+            viewerIndex = idx;
+            document.getElementById('pageCounter').innerText = `${idx+1} / ${viewerList.length}`;
+            scale=1; pointX=0; pointY=0; rotation=0; updateTransform();
+            const item = viewerList[idx];
+            let blob;
+            if(item.type==='zip') blob = await item.obj.async('blob');
+            else blob = item.obj;
+            if(item.type==='file') document.getElementById('viewerTitle').innerText = item.obj.name;
+            const url = URL.createObjectURL(blob);
+            if(imgEl.dataset.prev) URL.revokeObjectURL(imgEl.dataset.prev);
+            imgEl.onload = () => { imgEl.dataset.prev = url; };
+            imgEl.src = url;
+        }
+
+        function closeViewer() { modal.style.display='none'; imgEl.src=""; }
+        function prevPage() { if(viewerIndex>0) showImage(viewerIndex-1); else showFeedback("첫 페이지"); }
+        function nextPage() { if(viewerIndex<viewerList.length-1) showImage(viewerIndex+1); else showFeedback("마지막 페이지"); }
+        
+        function goToFirst() { showImage(0); showFeedback("처음"); }
+        function goToLast() { showImage(viewerList.length-1); showFeedback("끝"); }
+
+        function jumpPage(delta) {
+            let next = viewerIndex + delta;
+            if(next < 0) next = 0; if(next >= viewerList.length) next = viewerList.length - 1;
+            if(next !== viewerIndex) { showImage(next); showFeedback(delta > 0 ? `+${delta}` : `${delta}`); }
+            else { showFeedback(delta > 0 ? "끝" : "처음"); }
+        }
+
+        function showFeedback(txt) {
+            feedbackEl.innerText = txt; feedbackEl.style.opacity = 1;
+            setTimeout(() => feedbackEl.style.opacity = 0, 800);
+        }
+
+        document.addEventListener('keydown', e => {
+            if(modal.style.display==='block') {
+                if(e.key==='ArrowLeft') prevPage();
+                else if(e.key==='ArrowRight') nextPage();
+                else if(e.key==='Escape') closeViewer();
+            }
+        });
+    </script>
+</body>
+</html>

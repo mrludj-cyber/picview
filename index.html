@@ -128,6 +128,42 @@
         .preview-actions {
             margin-top: 15px; display: flex; gap: 10px;
         }
+        /* 캐시 상태 아이콘 스타일 */
+        .cache-status-badge {
+            position: absolute;
+            bottom: 3px;
+            right: 3px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            z-index: 15;
+            background: rgba(0,0,0,0.7);
+            border: 1px solid rgba(255,255,255,0.2);
+            transition: all 0.3s;
+        }
+        /* 작업 중 (파란색 회전 애니메이션) */
+        .status-syncing {
+            background: #0d6efd;
+            border-color: #fff;
+            box-shadow: 0 0 5px #0d6efd;
+            animation: pulse 1s infinite alternate;
+        }
+        /* 완료 (초록색 체크) */
+        .status-completed {
+            background: #198754;
+            border-color: #fff;
+        }
+        /* 미완성/대기 (회색) */
+        .status-pending { background: rgba(100,100,100,0.5); }
+
+        @keyframes pulse {
+            from { transform: scale(0.9); opacity: 0.8; }
+            to { transform: scale(1.1); opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -607,82 +643,85 @@
             try { const b = await createResizedThumbnail(file); saveToCache(key, b); updateCacheStatus(); el.innerHTML=`<img src="${URL.createObjectURL(b)}" class="thumb-img loaded">`; } catch(e){ el.innerText="Err"; }
         }
         async function loadZipThumb(el, file) {
-            const key = getCacheKey(file);           // 2분할(목록용) 키
-            const previewKey = key + "_preview";     // 4분할(팝업용) 키
+            const key = getCacheKey(file);
+            const previewKey = key + "_preview";
 
-            // ==========================================
-            // 1단계: 목록에 표시할 2분할 썸네일 처리 (최우선)
-            // ==========================================
-            let thumbBlob = await getFromCache(key);
+            // 상태 아이콘 생성을 위한 헬퍼
+            const updateIcon = (status) => {
+                let iconHtml = '';
+                if (status === 'syncing') iconHtml = '<div class="cache-status-badge status-syncing" title="캐시 생성 중...">⏳</div>';
+                else if (status === 'completed') iconHtml = '<div class="cache-status-badge status-completed" title="모든 캐시 완료">✅</div>';
+                else iconHtml = '<div class="cache-status-badge status-pending" title="대기 중">·</div>';
+                
+                // 기존 아이콘 제거 후 삽입
+                const oldBadge = el.querySelector('.cache-status-badge');
+                if (oldBadge) oldBadge.remove();
+                el.insertAdjacentHTML('beforeend', iconHtml);
+            };
 
+            // 1. 초기 상태 확인
+            const hasThumb = await getFromCache(key);
+            const hasPreview = await getFromCache(previewKey);
+
+            if (hasThumb && hasPreview) {
+                updateIcon('completed');
+            } else {
+                updateIcon('syncing'); // 작업 시작
+            }
+
+            // 2. 2분할 썸네일 처리
+            let thumbBlob = hasThumb;
             if (!thumbBlob) {
-                // 캐시 없으면 생성 시작
                 try {
                     const z = await JSZip.loadAsync(file);
-                    const imgs = Object.keys(z.files)
-                        .filter(n => !n.startsWith('__') && n.match(IMG_EXT))
-                        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-
+                    const imgs = Object.keys(z.files).filter(n => !n.startsWith('__') && n.match(IMG_EXT)).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
+                    
                     if (imgs.length > 0) {
-                        // 앞에서부터 최대 5개 파일 검사하며 썸네일 생성 시도
-                        for (let i = 0; i < Math.min(imgs.length, 5); i++) {
-                            try {
-                                const blob = await z.file(imgs[i]).async('blob');
-                                // 첫 파일이고 이미지가 여러개면 2분할 시도
-                                if (i === 0 && imgs.length > 1) {
-                                    try {
-                                        const lastBlob = await z.file(imgs[imgs.length - 1]).async('blob');
-                                        thumbBlob = await createSplitThumbnail(blob, lastBlob);
-                                    } catch (splitErr) {
-                                        // 2분할 실패하면 단일로 재시도 (createResizedThumbnail은 위에서 정의한 loadImageSafe 사용 필요)
-                                        // 편의상 여기선 바로 단일 생성 로직 구현
-                                        const d = await loadImageSafe(blob);
-                                        thumbBlob = await createFromImg(d.img); // 아래 보조함수 필요
-                                        URL.revokeObjectURL(d.url);
-                                    }
-                                } else {
-                                    // 2번째 파일부터는 단일 썸네일
-                                    const d = await loadImageSafe(blob);
-                                    thumbBlob = await createFromImg(d.img);
-                                    URL.revokeObjectURL(d.url);
-                                }
-                                if (thumbBlob) break; // 성공하면 루프 종료
-                            } catch (e) { }
+                        // ... (이전의 2분할 생성 로직 동일) ...
+                        const b1 = await z.file(imgs[0]).async('blob');
+                        if (imgs.length > 1) {
+                            const bLast = await z.file(imgs[imgs.length-1]).async('blob');
+                            thumbBlob = await createSplitThumbnail(b1, bLast);
+                        } else {
+                            const d = await loadImageSafe(b1);
+                            thumbBlob = await createFromImg(d.img);
+                            URL.revokeObjectURL(d.url);
                         }
                     }
-                    // 생성된 2분할 썸네일 저장
                     if (thumbBlob) {
                         saveToCache(key, thumbBlob);
                         updateCacheStatus();
                     }
-                } catch (e) { console.warn("Thumb Gen Error", e); }
+                } catch (e) { console.error(e); }
             }
 
-            // 화면 표시 (2분할 혹은 단일)
+            // 화면에 썸네일 표시
             if (thumbBlob) {
                 el.innerHTML = `<div class="badge-type badge-zip">ZIP</div><img src="${URL.createObjectURL(thumbBlob)}" class="thumb-img loaded">`;
+                updateIcon(hasPreview ? 'completed' : 'syncing');
             } else {
                 el.innerText = "Err";
             }
 
-            // ==========================================
-            // 2단계: 4분할 프리뷰 백그라운드 생성 (몰래 저장)
-            // ==========================================
-            // 썸네일 표시가 끝난 후, CPU 여유가 있을 때 실행
-            setTimeout(async () => {
-                // 이미 4분할 캐시가 있는지 확인 (중복 생성 방지)
-                const cachedPreview = await getFromCache(previewKey);
-                if (!cachedPreview) {
-                    // 캐시가 없으면 백그라운드에서 생성 시작
-                    // await를 쓰지 않고 비동기로 던져놓음 (UI 멈춤 방지)
-                    generateZipStrip(file).then(stripBlob => {
-                        if (stripBlob) {
-                            saveToCache(previewKey, stripBlob);
-                            console.log(`[Auto-Cache] Preview created for ${file.name}`);
-                        }
-                    }).catch(e => { /* 백그라운드 에러는 무시 */ });
-                }
-            }, 500); // 0.5초 뒤 시작 (스크롤 버벅임 방지)
+            // 3. 백그라운드 4분할 프리뷰 생성
+            if (!hasPreview) {
+                setTimeout(async () => {
+                    // 중복 실행 방지 위해 다시 한 번 확인
+                    const secondCheck = await getFromCache(previewKey);
+                    if (!secondCheck) {
+                        generateZipStrip(file).then(stripBlob => {
+                            if (stripBlob) {
+                                saveToCache(previewKey, stripBlob);
+                                updateIcon('completed'); // 4분할까지 완료되면 체크 표시
+                            }
+                        }).catch(() => {
+                            updateIcon('pending'); // 실패 시 다시 점으로
+                        });
+                    } else {
+                        updateIcon('completed');
+                    }
+                }, 300);
+            }
         }
         async function createFromImg(img) {
             return new Promise(resolve => {

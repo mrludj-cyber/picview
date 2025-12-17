@@ -6,7 +6,7 @@
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#000000">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <title>PIC Viewer</title>
+    <title>PIC Viewer Pro</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <style>
         /* === 기본 설정 === */
@@ -31,6 +31,7 @@
         .nav-title { font-size: 0.85rem; font-weight: bold; color: #fff; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
         
         .btn-primary { display: inline-block; padding: 10px 20px; cursor: pointer; background-color: #0d6efd; color: white; border-radius: 6px; border:none; font-weight: bold; font-size: 0.9rem; }
+        .btn-history { background-color: #6f42c1; } /* 히스토리 버튼 색상 */
         .btn-secondary { background-color: #444; color: white; border: 1px solid #666; padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 0.8rem; }
         .btn-danger { background-color: #dc3545; color: white; border: none; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
         .cache-info { font-size: 0.75rem; color: #888; margin-top: 5px; display: flex; align-items: center; justify-content: center; gap: 10px;}
@@ -54,6 +55,16 @@
         .thumb-img.loaded { opacity: 1; }
         .badge-type { position: absolute; top: 2px; right: 2px; padding: 1px 3px; background-color: rgba(0,0,0,0.7); color: #fff; border-radius: 3px; font-size: 0.55rem; font-weight: bold; z-index: 10; pointer-events: none; }
         .badge-zip { color: #ffc107; border: 1px solid #ffc107; }
+
+        /* === 히스토리 스타일 === */
+        .history-folder-group { margin-bottom: 5px; border: 1px solid #333; border-radius: 6px; overflow: hidden; grid-column: 1 / -1; }
+        .history-folder-header {
+            background-color: #222; padding: 12px; cursor: pointer;
+            display: flex; justify-content: space-between; align-items: center;
+            font-weight: bold; color: #ffd43b; user-select: none; font-size: 0.9rem;
+        }
+        .history-folder-content { display: none; padding: 5px; background-color: #111; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+        @media (orientation: landscape) { .history-folder-content { grid-template-columns: repeat(8, 1fr); } }
         
         /* === 뷰어 모달 === */
         .modal-overlay { display: none; position: fixed; top: 0; bottom: 0; left: 0; right: 0; width: 100%; height: 100%; background-color: #000; z-index: 2000; overflow: hidden; }
@@ -61,7 +72,7 @@
         #zoomContainer { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; overflow: visible; touch-action: none; }
         #mainImage { max-width: 100%; max-height: 100%; object-fit: contain; transform-origin: center center; will-change: transform; transition: opacity 0.15s; }
         
-        /* 애니메이션 클래스 (!important로 인라인 스타일 덮어쓰기) */
+        /* 애니메이션 클래스 */
         .anim-slide-left { animation: slideOutLeft 0.2s forwards !important; }
         .anim-slide-right { animation: slideOutRight 0.2s forwards !important; }
         .anim-fade-in { animation: fadeIn 0.2s forwards !important; }
@@ -75,20 +86,16 @@
         .viewer-title { font-size: 0.9rem; font-weight: bold; text-shadow: 1px 1px 2px #000; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; max-width: 70%; }
         .close-btn { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: white; border-radius: 50%; width: 32px; height: 32px; cursor: pointer; font-size: 1rem; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(4px); }
 
-        /* === 하단 툴바 (1줄로 최적화) === */
+        /* === 하단 툴바 === */
         .bottom-toolbar {
             position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
             background: rgba(20, 20, 20, 0.85); backdrop-filter: blur(10px);
             padding: 5px 10px; border-radius: 30px; border: 1px solid rgba(255,255,255,0.15);
             display: flex; gap: 8px; z-index: 2020; pointer-events: auto;
             justify-content: center; align-items: center;
-            white-space: nowrap; overflow-x: auto; /* 화면 작으면 스크롤 */
-            max-width: 95%;
+            white-space: nowrap; overflow-x: auto; max-width: 95%;
         }
-        
-        /* 스크롤바 숨김 */
         .bottom-toolbar::-webkit-scrollbar { display: none; } 
-        
         .tool-btn {
             background: rgba(255,255,255,0.05); border: none; 
             color: rgba(255,255,255,0.9); border-radius: 50%;
@@ -105,25 +112,68 @@
         
         .page-counter { position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.5); padding: 4px 12px; border-radius: 12px; font-size: 0.8rem; color: #ddd; pointer-events: none; z-index: 2020; }
         .feedback-msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); background: rgba(0,0,0,0.7); color: white; padding: 15px 25px; border-radius: 10px; font-size: 1.2rem; font-weight: bold; pointer-events: none; opacity: 0; transition: opacity 0.2s; z-index: 2050; }
+
+        /* === ZIP 프리뷰 팝업 === */
+        .preview-modal {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.9); z-index: 3000;
+            justify-content: center; align-items: center; flex-direction: column;
+        }
+        .preview-content {
+            position: relative; max-width: 90%; max-height: 80%;
+            background: #111; border: 1px solid #444; border-radius: 8px;
+            overflow-y: auto; display: flex; flex-direction: column;
+        }
+        .preview-img { width: 100%; height: auto; display: block; }
+        .preview-actions {
+            margin-top: 15px; display: flex; gap: 10px;
+        }
     </style>
 </head>
 <body>
     <div class="main-wrapper">
         <div class="control-panel">
+            <!-- 네비게이션 (스캔 모드용) -->
             <div id="navArea" class="nav-bar" style="display:none;">
                 <button class="btn-secondary" onclick="navigateUp()">⬅️ 상위</button>
                 <div id="currentPathDisplay" class="nav-title">/</div>
             </div>
-            <div id="uploadArea">
-                <label for="folder-upload" class="btn-primary">📂 폴더 열기 (Start)</label>
-                <input id="folder-upload" type="file" webkitdirectory directory multiple />
+            
+            <!-- 메인 버튼 -->
+            <div id="mainControls">
+                <label for="folder-upload" class="btn-primary">📂 폴더 스캔</label>
+                <button class="btn-primary btn-history" onclick="toggleHistoryMode(true)">📜 히스토리</button>
             </div>
+
+            <!-- 히스토리용 컨트롤 -->
+            <div id="historyControls" style="display:none; gap:10px; justify-content:center; margin-bottom:5px;">
+                <button class="btn-secondary" onclick="toggleHistoryMode(false)">↩️ 목록으로</button>
+                <button class="btn-danger" style="background:#b02a37" onclick="clearHistory()">💣 기록 초기화</button>
+            </div>
+            
+            <input id="folder-upload" type="file" webkitdirectory directory multiple />
+
             <div class="cache-info">
-                <span id="cacheStatus">캐시 확인 중...</span>
-                <button class="btn-danger" onclick="clearThumbnailCache()">🗑️ 삭제</button>
+                <span id="cacheStatus">DB 로딩 중...</span>
+                <button class="btn-danger" onclick="clearThumbnailCache()">🗑️ 캐시삭제</button>
             </div>
         </div>
+
+        <!-- 갤러리 영역 -->
         <div id="gallery" class="container"></div>
+        <div id="gallery-history" class="container" style="display:none;"></div>
+    </div>
+
+    <!-- ZIP 4분할 프리뷰 팝업 -->
+    <div id="previewModal" class="preview-modal" onclick="closePreviewModal()">
+        <div class="preview-content" onclick="event.stopPropagation()">
+            <img id="previewStrip" class="preview-img" src="" alt="Preview">
+            <div id="previewMsg" style="color:white; padding:20px; text-align:center; display:none;">로딩 중...</div>
+        </div>
+        <div class="preview-actions">
+            <button class="btn-primary" id="btnOpenZipViewer" onclick="openCurrentZipViewer()">▶ 뷰어로 열기</button>
+            <button class="btn-secondary" onclick="closePreviewModal()">닫기</button>
+        </div>
     </div>
 
     <!-- 뷰어 모달 -->
@@ -144,15 +194,12 @@
             <div class="click-zone zone-left" onclick="prevPage()"></div>
             <div class="click-zone zone-right" onclick="nextPage()"></div>
 
-            <!-- 하단 툴바 (1줄 통합) -->
             <div class="bottom-toolbar">
                 <button class="tool-btn" onclick="goToFirst()" title="처음">⏮</button>
                 <button class="tool-btn text-btn" onclick="jumpPage(-10)">-10</button>
                 <button class="tool-btn" onclick="rotate(-90)" title="반시계">↺</button>
-                
                 <button class="tool-btn" onclick="prevPage()" style="background:rgba(255,255,255,0.15)">◀</button>
                 <button class="tool-btn" onclick="nextPage()" style="background:rgba(255,255,255,0.15)">▶</button>
-                
                 <button class="tool-btn" onclick="rotate(90)" title="시계">↻</button>
                 <button class="tool-btn text-btn" onclick="jumpPage(10)">+10</button>
                 <button class="tool-btn" onclick="goToLast()" title="끝">⏭</button>
@@ -161,40 +208,205 @@
     </div>
 
     <script>
-        // === DB Setup ===
-        const DB_NAME = 'GalleryThumbDB', STORE_NAME = 'thumbnails';
+        // === DB Setup (Thumbnails & History) ===
+        const DB_NAME = 'PicViewerDB', THUMB_STORE = 'thumbnails', HIST_STORE = 'history';
         let db;
         const IMG_EXT = /\.(jpg|jpeg|png|gif|webp|bmp|nep|nel)$/i;
 
         function initDB() {
-            const req = indexedDB.open(DB_NAME, 1);
-            req.onupgradeneeded = e => { if(!e.target.result.objectStoreNames.contains(STORE_NAME)) e.target.result.createObjectStore(STORE_NAME); };
+            const req = indexedDB.open(DB_NAME, 2);
+            req.onupgradeneeded = e => {
+                const d = e.target.result;
+                if(!d.objectStoreNames.contains(THUMB_STORE)) d.createObjectStore(THUMB_STORE);
+                if(!d.objectStoreNames.contains(HIST_STORE)) d.createObjectStore(HIST_STORE, { keyPath: 'path' });
+            };
             req.onsuccess = e => { db = e.target.result; updateCacheStatus(); };
         }
         initDB();
 
         function getCacheKey(f) { return `${f.name}_${f.size}_${f.lastModified}`; }
-        async function saveToCache(k, b) { if(db) db.transaction(STORE_NAME,'readwrite').objectStore(STORE_NAME).put(b, k); }
+        async function saveToCache(k, b) { if(db) db.transaction(THUMB_STORE,'readwrite').objectStore(THUMB_STORE).put(b, k); }
         async function getFromCache(k) {
             if(!db) return null;
             return new Promise(r => {
-                const req = db.transaction(STORE_NAME,'readonly').objectStore(STORE_NAME).get(k);
+                const req = db.transaction(THUMB_STORE,'readonly').objectStore(THUMB_STORE).get(k);
                 req.onsuccess = () => r(req.result); req.onerror = () => r(null);
             });
         }
         function clearThumbnailCache() {
-            if(!confirm("캐시를 모두 삭제하시겠습니까?")) return;
-            const tx = db.transaction(STORE_NAME,'readwrite');
-            tx.objectStore(STORE_NAME).clear();
-            tx.oncomplete = () => { alert("삭제됨"); location.reload(); };
+            if(!confirm("모든 썸네일 캐시를 삭제하시겠습니까?")) return;
+            const tx = db.transaction(THUMB_STORE,'readwrite');
+            tx.objectStore(THUMB_STORE).clear();
+            tx.oncomplete = () => { alert("삭제 완료"); updateCacheStatus(); };
+        }
+        function clearHistory() {
+            if(!confirm("히스토리 기록을 삭제하시겠습니까? (캐시 이미지는 유지)")) return;
+            const tx = db.transaction(HIST_STORE,'readwrite');
+            tx.objectStore(HIST_STORE).clear();
+            tx.oncomplete = () => { alert("기록 초기화됨"); renderHistoryView(); };
         }
         function updateCacheStatus() {
             if(!db) return;
-            const req = db.transaction(STORE_NAME,'readonly').objectStore(STORE_NAME).count();
-            req.onsuccess = () => document.getElementById('cacheStatus').innerText = `저장된 썸네일: ${req.result}개`;
+            const req = db.transaction(THUMB_STORE,'readonly').objectStore(THUMB_STORE).count();
+            req.onsuccess = () => document.getElementById('cacheStatus').innerText = `캐시: ${req.result}개`;
         }
 
-        // === Thumbnails ===
+        // === History Logic ===
+        function addToHistory(file) {
+            if(!db) return;
+            const tx = db.transaction(HIST_STORE, 'readwrite');
+            const path = file.webkitRelativePath || file.name;
+            const item = {
+                path: path,
+                name: file.name,
+                size: file.size,
+                modTime: file.lastModified,
+                type: file.name.toLowerCase().endsWith('.zip') ? 'zip' : 'img',
+                timestamp: new Date().getTime()
+            };
+            tx.objectStore(HIST_STORE).put(item);
+        }
+
+        let isHistoryMode = false;
+        function toggleHistoryMode(show) {
+            isHistoryMode = show;
+            const scanDiv = document.getElementById('gallery');
+            const histDiv = document.getElementById('gallery-history');
+            const mainCtrl = document.getElementById('mainControls');
+            const navArea = document.getElementById('navArea');
+            const histCtrl = document.getElementById('historyControls');
+
+            if(show) {
+                scanDiv.style.display = 'none';
+                histDiv.style.display = 'block';
+                mainCtrl.style.display = 'none';
+                navArea.style.display = 'none';
+                histCtrl.style.display = 'flex';
+                renderHistoryView();
+            } else {
+                scanDiv.style.display = 'grid';
+                histDiv.style.display = 'none';
+                mainCtrl.style.display = 'block';
+                if(allFiles.length > 0) navArea.style.display = 'flex';
+                histCtrl.style.display = 'none';
+            }
+        }
+
+        function renderHistoryView() {
+            if(!db) return;
+            const gallery = document.getElementById('gallery-history');
+            gallery.innerHTML = '<div style="grid-column:1/-1; color:#777; padding:20px; text-align:center;">로딩 중...</div>';
+            
+            const tx = db.transaction(HIST_STORE, 'readonly').objectStore(HIST_STORE).getAll();
+            tx.onsuccess = () => {
+                const list = tx.result;
+                if(!list || list.length === 0) {
+                    gallery.innerHTML = '<div style="grid-column:1/-1; padding:20px; color:#aaa; text-align:center;">기록이 없습니다.</div>';
+                    return;
+                }
+
+                // 그룹화 (폴더 경로 기준)
+                const groups = {};
+                list.forEach(item => {
+                    const parts = item.path.split('/');
+                    let folderName = parts.length > 1 ? parts.slice(0, -1).join('/') : "Root";
+                    if(!groups[folderName]) groups[folderName] = [];
+                    groups[folderName].push(item);
+                });
+
+                gallery.innerHTML = '';
+                // 폴더명 정렬 및 렌더링
+                Object.keys(groups).sort().forEach((folder, fIdx) => {
+                    const items = groups[folder].sort((a,b) => a.name.localeCompare(b.name, undefined, {numeric:true}));
+                    const folderId = `hist-folder-${fIdx}`;
+                    
+                    const headerHtml = `
+                        <div class="history-folder-group">
+                            <div class="history-folder-header" onclick="toggleFolder('${folderId}')">
+                                <span>📂 ${folder}</span>
+                                <span style="font-size:0.8rem; color:#888;">${items.length}개</span>
+                            </div>
+                            <div id="${folderId}" class="history-folder-content">
+                                <!-- 아이템 삽입 -->
+                            </div>
+                        </div>`;
+                    gallery.insertAdjacentHTML('beforeend', headerHtml);
+                    
+                    const contentDiv = document.getElementById(folderId);
+                    items.forEach(item => {
+                        // 히스토리 아이템은 클릭 시 뷰어를 열 수 없음(파일 객체 소실). 대신 프리뷰/확대 보기 제공.
+                        const isZip = item.type === 'zip';
+                        // 캐시 키 재구성
+                        const dummyFile = { name: item.name, size: item.size, lastModified: item.modTime };
+                        const key = getCacheKey(dummyFile);
+                        
+                        // ZIP인 경우 프리뷰 키 확인
+                        const clickAction = isZip ? 
+                            `loadZipPreviewFromHistory('${key}', '${item.name}')` : 
+                            `viewHistoryImage('${key}', '${item.name}')`;
+
+                        const html = `
+                            <div class="item" onclick="${clickAction}">
+                                <div class="thumb-container lazy-hist" data-key="${key}" data-type="${item.type}">
+                                    ${isZip ? '<div class="badge-type badge-zip">ZIP</div>' : ''}
+                                    <span style="color:#666; font-size:0.6rem;">...</span>
+                                </div>
+                                <div class="filename" style="color:#999;">${item.name}</div>
+                            </div>`;
+                        contentDiv.insertAdjacentHTML('beforeend', html);
+                    });
+                });
+                
+                // 히스토리 썸네일 로딩 관찰자
+                const histObs = new IntersectionObserver((entries, obs) => {
+                    entries.forEach(e => {
+                        if(e.isIntersecting) {
+                            loadHistoryThumb(e.target);
+                            obs.unobserve(e.target);
+                        }
+                    });
+                });
+                document.querySelectorAll('.lazy-hist').forEach(el => histObs.observe(el));
+            };
+        }
+
+        function toggleFolder(id) {
+            const el = document.getElementById(id);
+            el.style.display = (el.style.display === 'grid') ? 'none' : 'grid';
+        }
+
+        async function loadHistoryThumb(el) {
+            const key = el.dataset.key;
+            const cache = await getFromCache(key);
+            if(cache) {
+                el.innerHTML = `${el.dataset.type==='zip'?'<div class="badge-type badge-zip">ZIP</div>':''}<img src="${URL.createObjectURL(cache)}" class="thumb-img loaded">`;
+            } else {
+                el.innerText = "No Cache";
+            }
+        }
+
+        // 히스토리에서 이미지 클릭 시 (단일 이미지 크게 보기)
+        async function viewHistoryImage(key, name) {
+            const blob = await getFromCache(key);
+            if(!blob) return alert("캐시된 이미지가 없습니다.");
+            openPreviewModalDirect(blob, name, false);
+        }
+
+        // 히스토리에서 ZIP 클릭 시 (4분할 프리뷰 캐시 확인)
+        async function loadZipPreviewFromHistory(baseKey, name) {
+            const previewKey = baseKey + "_preview"; // 4분할 캐시 키
+            const blob = await getFromCache(previewKey);
+            if(blob) {
+                openPreviewModalDirect(blob, name, false); // false = 뷰어 열기 버튼 숨김 (파일 없으므로)
+            } else {
+                // 프리뷰가 없으면 기본 썸네일이라도 보여줌
+                const cover = await getFromCache(baseKey);
+                if(cover) openPreviewModalDirect(cover, name + " (Cover)", false);
+                else alert("미리보기가 캐시되지 않았습니다.");
+            }
+        }
+
+        // === Image Processing (Create Thumbnails) ===
         async function createResizedThumbnail(blob) {
             return new Promise(resolve => {
                 const img = new Image(); const url = URL.createObjectURL(blob);
@@ -231,14 +443,79 @@
             });
         }
 
-        // === Main Logic ===
+        // === ZIP 4-Split Preview Logic ===
+        async function generateZipStrip(file) {
+            try {
+                const z = await JSZip.loadAsync(file);
+                const names = Object.keys(z.files).filter(n=>!n.startsWith('__') && n.match(IMG_EXT)).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
+                if(names.length === 0) return null;
+
+                // 4장 추출 (0%, 33%, 66%, 100%)
+                const indices = [0, Math.floor(names.length*0.33), Math.floor(names.length*0.66), names.length-1];
+                // 중복 제거 및 정렬
+                const uniqueIndices = [...new Set(indices)].sort((a,b)=>a-b);
+                
+                const blobs = await Promise.all(uniqueIndices.map(i => z.file(names[i]).async('blob')));
+                
+                // 캔버스에 세로로 이어 붙이기
+                return new Promise(resolve => {
+                    const canvas = document.createElement('canvas');
+                    const w = 300; 
+                    // 높이는 일단 임의 설정, 이미지 로드 후 조정 필요하지만
+                    // 여기서는 간단히 4:3 비율 4장 가정 -> 300x400 * 4 = 300x1600?? 
+                    // 그냥 화면에 꽉 차게 하기 위해 각 이미지 높이를 고정(400px)
+                    const hPerImg = 400;
+                    canvas.width = w;
+                    canvas.height = hPerImg * blobs.length;
+                    
+                    const ctx = canvas.getContext('2d');
+                    let loadedCount = 0;
+
+                    blobs.forEach((blob, idx) => {
+                        const img = new Image();
+                        img.src = URL.createObjectURL(blob);
+                        img.onload = () => {
+                            // Cover fit draw
+                            const sr = img.width/img.height;
+                            const dr = w/hPerImg;
+                            let sx, sy, sw, sh;
+                            if(sr > dr) { sh=img.height; sw=sh*dr; sy=0; sx=(img.width-sw)/2; }
+                            else { sw=img.width; sh=sw/dr; sx=0; sy=(img.height-sh)/2; }
+                            
+                            ctx.drawImage(img, sx, sy, sw, sh, 0, idx * hPerImg, w, hPerImg);
+                            URL.revokeObjectURL(img.src);
+                            loadedCount++;
+                            if(loadedCount === blobs.length) {
+                                // 구분선
+                                ctx.fillStyle = "rgba(255,255,255,0.5)";
+                                for(let k=1; k<blobs.length; k++) ctx.fillRect(0, k*hPerImg, w, 2);
+                                
+                                canvas.toBlob(resBlob => resolve(resBlob), 'image/jpeg', 0.8);
+                            }
+                        };
+                    });
+                });
+
+            } catch(e) { console.error(e); return null; }
+        }
+
+
+        // === Main Logic (Scan) ===
         let allFiles=[], currentPath="", viewerList=[], viewerIndex=0;
+        let currentZipIndex = -1; // 프리뷰 팝업에서 사용
 
         document.getElementById('folder-upload').addEventListener('change', e => {
+            if(isHistoryMode) toggleHistoryMode(false);
             const raw = Array.from(e.target.files);
             allFiles = raw.filter(f => f.name.match(IMG_EXT) || f.name.toLowerCase().endsWith('.zip'));
             if(!allFiles.length) return alert("파일이 없습니다.");
-            currentPath=""; document.getElementById('uploadArea').style.display='none'; document.getElementById('navArea').style.display='flex';
+            
+            // 히스토리 DB에 메타데이터 저장
+            allFiles.forEach(f => addToHistory(f));
+
+            currentPath=""; 
+            document.getElementById('mainControls').style.display='none'; 
+            document.getElementById('navArea').style.display='flex';
             renderGallery();
         });
 
@@ -267,9 +544,13 @@
             });
             Array.from(folders).sort().forEach(n => gal.insertAdjacentHTML('beforeend', `<div class="item folder-item" onclick="enterFolder('${n}')"><div class="folder-icon">📁</div><div class="filename">${n}</div></div>`));
             files.sort((a,b)=>a.f.name.localeCompare(b.f.name, undefined, {numeric:true}));
+            
             files.forEach(item => {
                 const isZip = item.f.name.toLowerCase().endsWith('.zip');
-                gal.insertAdjacentHTML('beforeend', `<div class="item" onclick="openViewer(${item.i})"><div class="thumb-container lazy-target" data-index="${item.i}" data-type="${isZip?'zip':'img'}">${isZip ? '<div class="badge-type badge-zip">ZIP</div>' : ''}<span style="color:#666; font-size:0.6rem;">...</span></div><div class="filename">${item.f.name}</div></div>`);
+                // ZIP이면 openZipPreview, 이미지면 openViewer
+                const clickFn = isZip ? `openZipPreview(${item.i})` : `openViewer(${item.i})`;
+                
+                gal.insertAdjacentHTML('beforeend', `<div class="item" onclick="${clickFn}"><div class="thumb-container lazy-target" data-index="${item.i}" data-type="${isZip?'zip':'img'}">${isZip ? '<div class="badge-type badge-zip">ZIP</div>' : ''}<span style="color:#666; font-size:0.6rem;">...</span></div><div class="filename">${item.f.name}</div></div>`);
             });
             document.querySelectorAll('.lazy-target').forEach(el => observer.observe(el));
         }
@@ -282,6 +563,7 @@
             renderGallery(); window.scrollTo(0,0);
         }
 
+        // === Thumb Loaders ===
         async function loadImgThumb(el, file) {
             const key = getCacheKey(file), cache = await getFromCache(key);
             if(cache) { el.innerHTML=`<img src="${URL.createObjectURL(cache)}" class="thumb-img loaded">`; return; }
@@ -301,7 +583,71 @@
             } catch(e){ el.innerText="Err"; }
         }
 
-        // === 뷰어 (줌 + 회전 + 스와이프 + 애니메이션) ===
+        // === ZIP Preview Modal ===
+        const prevModal = document.getElementById('previewModal');
+        const prevImg = document.getElementById('previewStrip');
+        const prevMsg = document.getElementById('previewMsg');
+        const btnOpenViewer = document.getElementById('btnOpenZipViewer');
+
+        async function openZipPreview(idx) {
+            const file = allFiles[idx];
+            if(!file) return;
+            
+            currentZipIndex = idx; // 뷰어로 열기 위해 저장
+            prevModal.style.display = 'flex';
+            prevImg.style.display = 'none';
+            prevMsg.style.display = 'block';
+            prevMsg.innerText = "미리보기 생성 중...";
+            btnOpenViewer.style.display = 'block'; // 스캔 모드이므로 뷰어 열기 가능
+
+            const baseKey = getCacheKey(file);
+            const previewKey = baseKey + "_preview";
+
+            // 1. 캐시 확인
+            const cachedStrip = await getFromCache(previewKey);
+            if(cachedStrip) {
+                showPreviewImage(cachedStrip);
+                return;
+            }
+
+            // 2. 없으면 생성
+            const stripBlob = await generateZipStrip(file);
+            if(stripBlob) {
+                saveToCache(previewKey, stripBlob);
+                showPreviewImage(stripBlob);
+            } else {
+                prevMsg.innerText = "이미지 추출 실패";
+            }
+        }
+
+        function showPreviewImage(blob) {
+            prevImg.src = URL.createObjectURL(blob);
+            prevImg.style.display = 'block';
+            prevMsg.style.display = 'none';
+        }
+
+        function openPreviewModalDirect(blob, title, canOpenViewer) {
+            currentZipIndex = -1; // 직접 열기이므로 인덱스 없음
+            prevModal.style.display = 'flex';
+            prevImg.src = URL.createObjectURL(blob);
+            prevImg.style.display = 'block';
+            prevMsg.style.display = 'none';
+            btnOpenViewer.style.display = canOpenViewer ? 'block' : 'none';
+        }
+
+        function closePreviewModal() {
+            prevModal.style.display = 'none';
+            prevImg.src = "";
+        }
+
+        function openCurrentZipViewer() {
+            if(currentZipIndex !== -1) {
+                closePreviewModal();
+                openViewer(currentZipIndex);
+            }
+        }
+
+        // === Viewer (Zoom, Rotate, Swipe) ===
         const modal = document.getElementById('viewerModal');
         const imgEl = document.getElementById('mainImage');
         const zoomCon = document.getElementById('zoomContainer');
@@ -312,61 +658,40 @@
 
         function updateTransform() {
             imgEl.style.transform = `translate(${pointX}px, ${pointY}px) rotate(${rotation}deg) scale(${scale})`;
-            const zoneDisplay = scale > 1.1 ? 'none' : 'block';
-            document.querySelector('.zone-left').style.display = zoneDisplay;
-            document.querySelector('.zone-right').style.display = zoneDisplay;
+            const display = scale > 1.1 ? 'none' : 'block';
+            document.querySelector('.zone-left').style.display = display;
+            document.querySelector('.zone-right').style.display = display;
         }
+        function rotate(deg) { rotation += deg; updateTransform(); showFeedback(`${rotation}°`); }
 
-        function rotate(deg) { rotation = (rotation + deg); updateTransform(); showFeedback(`${rotation}°`); }
-
-        // Touch Events
         zoomCon.addEventListener('touchstart', e => {
             if(e.touches.length===2) {
-                isDragging=false;
-                startDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
+                isDragging=false; startDist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
             } else if(e.touches.length===1) {
-                isDragging=true;
-                startX = e.touches[0].pageX; startY = e.touches[0].pageY;
+                isDragging=true; startX = e.touches[0].pageX; startY = e.touches[0].pageY;
                 if(scale > 1) { startX -= pointX; startY -= pointY; }
             }
         });
-
         zoomCon.addEventListener('touchmove', e => {
             if(e.touches.length===2) {
                 e.preventDefault();
                 const dist = Math.hypot(e.touches[0].pageX - e.touches[1].pageX, e.touches[0].pageY - e.touches[1].pageY);
-                scale = Math.min(Math.max(1, scale + (dist - startDist)*0.005), 5);
-                startDist = dist; updateTransform();
+                scale = Math.min(Math.max(1, scale + (dist - startDist)*0.005), 5); startDist = dist; updateTransform();
             } else if(e.touches.length===1 && isDragging) {
                 if(scale > 1) {
-                    e.preventDefault();
-                    pointX = e.touches[0].pageX - startX; pointY = e.touches[0].pageY - startY;
-                    updateTransform();
+                    e.preventDefault(); pointX = e.touches[0].pageX - startX; pointY = e.touches[0].pageY - startY; updateTransform();
                 }
             }
         });
-
         zoomCon.addEventListener('touchend', e => {
-            // 스와이프 로직 (확대 안 된 상태 + 드래그 거리 30px 이상)
             if(scale === 1 && isDragging) {
-                const endX = e.changedTouches[0].pageX;
-                const endY = e.changedTouches[0].pageY;
-                const diffX = endX - startX;
-                const diffY = endY - startY;
-
-                if(Math.abs(diffX) > 30 && Math.abs(diffY) < 60) {
-                    if(diffX > 0) prevPage(); 
-                    else nextPage();
+                const diffX = e.changedTouches[0].pageX - startX;
+                if(Math.abs(diffX) > 40 && Math.abs(e.changedTouches[0].pageY - startY) < 60) {
+                    if(diffX > 0) prevPage(); else nextPage();
                 }
             }
-            
-            isDragging=false;
-            // 이미지가 1배율보다 작아지면 1배율로 복구 (놓았을 때)
-            if(scale < 1.0) { scale=1; pointX=0; pointY=0; updateTransform(); }
-            // 1배율보다 크면(확대 상태) 그대로 유지
+            isDragging=false; if(scale < 1.0) { scale=1; pointX=0; pointY=0; updateTransform(); }
         });
-        
-        // 더블탭
         let lastTap=0;
         zoomCon.addEventListener('touchend', e => {
             if(new Date().getTime()-lastTap < 300 && e.changedTouches.length===1) {
@@ -404,37 +729,22 @@
 
         async function showImage(idx, direction = 0) {
             if(idx<0 || idx>=viewerList.length) return;
-
-            // 애니메이션: 현재 이미지를 퇴장시킴 (direction: -1(prev) or 1(next))
             if(direction !== 0 && imgEl.src) {
-                const animClass = direction > 0 ? 'anim-slide-left' : 'anim-slide-right';
-                imgEl.classList.add(animClass);
-                
-                // 애니메이션 시간(0.2s) 기다린 후 로딩
-                await new Promise(r => setTimeout(r, 150)); 
-                imgEl.classList.remove(animClass);
+                const anim = direction > 0 ? 'anim-slide-left' : 'anim-slide-right';
+                imgEl.classList.add(anim); await new Promise(r => setTimeout(r, 150)); imgEl.classList.remove(anim);
             }
-
             viewerIndex = idx;
             document.getElementById('pageCounter').innerText = `${idx+1} / ${viewerList.length}`;
             scale=1; pointX=0; pointY=0; rotation=0; updateTransform();
             
             const item = viewerList[idx];
-            let blob;
-            if(item.type==='zip') blob = await item.obj.async('blob');
-            else blob = item.obj;
+            let blob = (item.type==='zip') ? await item.obj.async('blob') : item.obj;
             if(item.type==='file') document.getElementById('viewerTitle').innerText = item.obj.name;
-            
             const url = URL.createObjectURL(blob);
             if(imgEl.dataset.prev) URL.revokeObjectURL(imgEl.dataset.prev);
-            imgEl.onload = () => { imgEl.dataset.prev = url; };
+            imgEl.onload = () => imgEl.dataset.prev = url;
             imgEl.src = url;
-
-            // 등장 애니메이션
-            if(direction !== 0) {
-                imgEl.classList.add('anim-fade-in');
-                setTimeout(() => imgEl.classList.remove('anim-fade-in'), 200);
-            }
+            if(direction !== 0) { imgEl.classList.add('anim-fade-in'); setTimeout(() => imgEl.classList.remove('anim-fade-in'), 200); }
         }
 
         function closeViewer() { modal.style.display='none'; imgEl.src=""; }
@@ -448,17 +758,12 @@
             if(next !== viewerIndex) { showImage(next, delta>0?1:-1); showFeedback(delta > 0 ? `+${delta}` : `${delta}`); }
             else { showFeedback(delta > 0 ? "끝" : "처음"); }
         }
-
-        function showFeedback(txt) {
-            feedbackEl.innerText = txt; feedbackEl.style.opacity = 1;
-            setTimeout(() => feedbackEl.style.opacity = 0, 800);
-        }
-
+        function showFeedback(txt) { feedbackEl.innerText = txt; feedbackEl.style.opacity = 1; setTimeout(() => feedbackEl.style.opacity = 0, 800); }
         document.addEventListener('keydown', e => {
             if(modal.style.display==='block') {
-                if(e.key==='ArrowLeft') prevPage();
-                else if(e.key==='ArrowRight') nextPage();
-                else if(e.key==='Escape') closeViewer();
+                if(e.key==='ArrowLeft') prevPage(); else if(e.key==='ArrowRight') nextPage(); else if(e.key==='Escape') closeViewer();
+            } else if(prevModal.style.display==='flex' && e.key==='Escape') {
+                closePreviewModal();
             }
         });
     </script>

@@ -408,95 +408,132 @@
 
         // === Image Processing (Create Thumbnails) ===
         async function createResizedThumbnail(blob) {
-            return new Promise(resolve => {
-                const img = new Image(); const url = URL.createObjectURL(blob);
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                // .nep, .nel 등을 강제로 jpg로 인식시키기 위해 slice로 재생성
+                const jpgBlob = new Blob([blob], { type: 'image/jpeg' });
+                const url = URL.createObjectURL(jpgBlob);
+
                 img.onload = () => {
-                    const cvs = document.createElement('canvas');
-                    const scale = 240 / img.width;
-                    cvs.width = 240; cvs.height = img.height * scale;
-                    cvs.getContext('2d').drawImage(img, 0, 0, cvs.width, cvs.height);
-                    cvs.toBlob(b => { URL.revokeObjectURL(url); resolve(b); }, 'image/jpeg', 0.7);
+                    try {
+                        const cvs = document.createElement('canvas');
+                        // 썸네일 크기 최적화 (가로 240px 기준)
+                        const scale = 240 / img.width;
+                        cvs.width = 240;
+                        cvs.height = img.height * scale;
+                        const ctx = cvs.getContext('2d');
+                        ctx.drawImage(img, 0, 0, cvs.width, cvs.height);
+                        cvs.toBlob(b => {
+                            URL.revokeObjectURL(url);
+                            resolve(b);
+                        }, 'image/jpeg', 0.7);
+                    } catch (e) {
+                        URL.revokeObjectURL(url);
+                        reject(e);
+                    }
                 };
+
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error("Image Load Failed")); // 로딩 실패 시 에러 반환
+                };
+
                 img.src = url;
             });
         }
         async function createSplitThumbnail(b1, b2) {
-            return new Promise(resolve => {
-                const i1 = new Image(), i2 = new Image();
-                const u1 = URL.createObjectURL(b1), u2 = URL.createObjectURL(b2);
-                let loaded = 0; const check = () => { loaded++; if(loaded===2) draw(); };
-                i1.onload = check; i2.onload = check; i1.src = u1; i2.src = u2;
-                function draw() {
-                    const cvs = document.createElement('canvas'); cvs.width=240; cvs.height=320;
+            try {
+                // 안전한 로더 사용
+                const i1Data = await loadImageSafe(b1);
+                const i2Data = await loadImageSafe(b2);
+                const i1 = i1Data.img;
+                const i2 = i2Data.img;
+
+                return new Promise(resolve => {
+                    const cvs = document.createElement('canvas'); 
+                    cvs.width = 240; cvs.height = 320;
                     const ctx = cvs.getContext('2d');
-                    drawCover(ctx, i1, 0, 0, 120, 320); drawCover(ctx, i2, 120, 0, 120, 320);
-                    ctx.fillStyle="rgba(255,255,255,0.4)"; ctx.fillRect(119,0,2,320);
-                    cvs.toBlob(b => { URL.revokeObjectURL(u1); URL.revokeObjectURL(u2); resolve(b); }, 'image/jpeg', 0.7);
-                }
-                function drawCover(ctx, img, x, y, w, h) {
-                    const sr=img.width/img.height, dr=w/h;
-                    let sx, sy, sw, sh;
-                    if(sr>dr) { sh=img.height; sw=sh*dr; sy=0; sx=(img.width-sw)/2; }
-                    else { sw=img.width; sh=sw/dr; sx=0; sy=(img.height-sh)/2; }
-                    ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
-                }
-            });
+
+                    // 왼쪽 절반
+                    drawCover(ctx, i1, 0, 0, 120, 320); 
+                    // 오른쪽 절반
+                    drawCover(ctx, i2, 120, 0, 120, 320);
+                    
+                    // 구분선
+                    ctx.fillStyle="rgba(255,255,255,0.4)"; 
+                    ctx.fillRect(119, 0, 2, 320);
+
+                    // 메모리 해제
+                    URL.revokeObjectURL(i1Data.url);
+                    URL.revokeObjectURL(i2Data.url);
+
+                    cvs.toBlob(b => resolve(b), 'image/jpeg', 0.7);
+                });
+            } catch (e) {
+                throw e; // 하나라도 로드 실패하면 에러 던짐 -> 상위에서 단일 이미지로 대체됨
+            }
+        }
+        function drawCover(ctx, img, x, y, w, h) {
+            const sr = img.width/img.height, dr = w/h;
+            let sx, sy, sw, sh;
+            if(sr > dr) { sh = img.height; sw = sh * dr; sy = 0; sx = (img.width - sw) / 2; }
+            else { sw = img.width; sh = sw / dr; sx = 0; sy = (img.height - sh) / 2; }
+            ctx.drawImage(img, sx, sy, sw, sh, x, y, w, h);
         }
 
         // === ZIP 4-Split Preview Logic ===
+        function loadImageSafe(blob) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                // 브라우저가 모르는 확장자도 강제로 jpg로 인식시킴
+                const forcedBlob = new Blob([blob], { type: 'image/jpeg' });
+                const url = URL.createObjectURL(forcedBlob);
+                
+                img.onload = () => resolve({ img, url });
+                img.onerror = () => {
+                    URL.revokeObjectURL(url);
+                    reject(new Error("Image Load Failed"));
+                };
+                img.src = url;
+            });
+        }
         async function generateZipStrip(file) {
             try {
                 const z = await JSZip.loadAsync(file);
-                const names = Object.keys(z.files).filter(n=>!n.startsWith('__') && n.match(IMG_EXT)).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
+                const names = Object.keys(z.files).filter(n => !n.startsWith('__') && n.match(IMG_EXT)).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
                 if(names.length === 0) return null;
 
-                // 4장 추출 (0%, 33%, 66%, 100%)
-                const indices = [0, Math.floor(names.length*0.33), Math.floor(names.length*0.66), names.length-1];
-                // 중복 제거 및 정렬
-                const uniqueIndices = [...new Set(indices)].sort((a,b)=>a-b);
-                
-                const blobs = await Promise.all(uniqueIndices.map(i => z.file(names[i]).async('blob')));
-                
-                // 캔버스에 세로로 이어 붙이기
+                const targetIndices = [0, Math.floor(names.length*0.33), Math.floor(names.length*0.66), names.length-1];
+                let uniqueIndices = [...new Set(targetIndices)].sort((a,b)=>a-b);
+                const loadedImages = [];
+
+                for(let targetIdx of uniqueIndices) {
+                    for(let i = targetIdx; i < Math.min(targetIdx + 5, names.length); i++) {
+                        try {
+                            const blob = await z.file(names[i]).async('blob');
+                            const data = await loadImageSafe(blob);
+                            loadedImages.push(data);
+                            break; 
+                        } catch(e) {}
+                    }
+                }
+                if(loadedImages.length === 0) return null;
+
                 return new Promise(resolve => {
-                    const canvas = document.createElement('canvas');
-                    const w = 300; 
-                    // 높이는 일단 임의 설정, 이미지 로드 후 조정 필요하지만
-                    // 여기서는 간단히 4:3 비율 4장 가정 -> 300x400 * 4 = 300x1600?? 
-                    // 그냥 화면에 꽉 차게 하기 위해 각 이미지 높이를 고정(400px)
-                    const hPerImg = 400;
-                    canvas.width = w;
-                    canvas.height = hPerImg * blobs.length;
-                    
-                    const ctx = canvas.getContext('2d');
-                    let loadedCount = 0;
+                    const cvs = document.createElement('canvas');
+                    const w = 300; const hPerImg = 400;
+                    cvs.width = w; cvs.height = hPerImg * loadedImages.length;
+                    const ctx = cvs.getContext('2d');
+                    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, cvs.width, cvs.height);
 
-                    blobs.forEach((blob, idx) => {
-                        const img = new Image();
-                        img.src = URL.createObjectURL(blob);
-                        img.onload = () => {
-                            // Cover fit draw
-                            const sr = img.width/img.height;
-                            const dr = w/hPerImg;
-                            let sx, sy, sw, sh;
-                            if(sr > dr) { sh=img.height; sw=sh*dr; sy=0; sx=(img.width-sw)/2; }
-                            else { sw=img.width; sh=sw/dr; sx=0; sy=(img.height-sh)/2; }
-                            
-                            ctx.drawImage(img, sx, sy, sw, sh, 0, idx * hPerImg, w, hPerImg);
-                            URL.revokeObjectURL(img.src);
-                            loadedCount++;
-                            if(loadedCount === blobs.length) {
-                                // 구분선
-                                ctx.fillStyle = "rgba(255,255,255,0.5)";
-                                for(let k=1; k<blobs.length; k++) ctx.fillRect(0, k*hPerImg, w, 2);
-                                
-                                canvas.toBlob(resBlob => resolve(resBlob), 'image/jpeg', 0.8);
-                            }
-                        };
+                    loadedImages.forEach((item, idx) => {
+                        drawCover(ctx, item.img, 0, idx * hPerImg, w, hPerImg);
+                        if(idx > 0) { ctx.fillStyle = "rgba(255,255,255,0.5)"; ctx.fillRect(0, idx * hPerImg, w, 2); }
+                        URL.revokeObjectURL(item.url);
                     });
+                    cvs.toBlob(b => resolve(b), 'image/jpeg', 0.8);
                 });
-
-            } catch(e) { console.error(e); return null; }
+            } catch(e) { return null; }
         }
 
 
@@ -570,17 +607,91 @@
             try { const b = await createResizedThumbnail(file); saveToCache(key, b); updateCacheStatus(); el.innerHTML=`<img src="${URL.createObjectURL(b)}" class="thumb-img loaded">`; } catch(e){ el.innerText="Err"; }
         }
         async function loadZipThumb(el, file) {
-            const key = getCacheKey(file), cache = await getFromCache(key);
-            if(cache) { el.innerHTML=`<div class="badge-type badge-zip">ZIP</div><img src="${URL.createObjectURL(cache)}" class="thumb-img loaded">`; return; }
-            try {
-                const z = await JSZip.loadAsync(file);
-                const is = Object.keys(z.files).filter(n=>!n.startsWith('__') && n.match(IMG_EXT)).sort((a,b)=>a.localeCompare(b, undefined, {numeric:true}));
-                if(!is.length) { el.innerText="Empty"; return; }
-                const b1 = await z.file(is[0]).async('blob');
-                let fin = (is.length > 1) ? await createSplitThumbnail(b1, await z.file(is[is.length-1]).async('blob')) : await createResizedThumbnail(b1);
-                saveToCache(key, fin); updateCacheStatus();
-                el.innerHTML=`<div class="badge-type badge-zip">ZIP</div><img src="${URL.createObjectURL(fin)}" class="thumb-img loaded">`;
-            } catch(e){ el.innerText="Err"; }
+            const key = getCacheKey(file);           // 2분할(목록용) 키
+            const previewKey = key + "_preview";     // 4분할(팝업용) 키
+
+            // ==========================================
+            // 1단계: 목록에 표시할 2분할 썸네일 처리 (최우선)
+            // ==========================================
+            let thumbBlob = await getFromCache(key);
+
+            if (!thumbBlob) {
+                // 캐시 없으면 생성 시작
+                try {
+                    const z = await JSZip.loadAsync(file);
+                    const imgs = Object.keys(z.files)
+                        .filter(n => !n.startsWith('__') && n.match(IMG_EXT))
+                        .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+
+                    if (imgs.length > 0) {
+                        // 앞에서부터 최대 5개 파일 검사하며 썸네일 생성 시도
+                        for (let i = 0; i < Math.min(imgs.length, 5); i++) {
+                            try {
+                                const blob = await z.file(imgs[i]).async('blob');
+                                // 첫 파일이고 이미지가 여러개면 2분할 시도
+                                if (i === 0 && imgs.length > 1) {
+                                    try {
+                                        const lastBlob = await z.file(imgs[imgs.length - 1]).async('blob');
+                                        thumbBlob = await createSplitThumbnail(blob, lastBlob);
+                                    } catch (splitErr) {
+                                        // 2분할 실패하면 단일로 재시도 (createResizedThumbnail은 위에서 정의한 loadImageSafe 사용 필요)
+                                        // 편의상 여기선 바로 단일 생성 로직 구현
+                                        const d = await loadImageSafe(blob);
+                                        thumbBlob = await createFromImg(d.img); // 아래 보조함수 필요
+                                        URL.revokeObjectURL(d.url);
+                                    }
+                                } else {
+                                    // 2번째 파일부터는 단일 썸네일
+                                    const d = await loadImageSafe(blob);
+                                    thumbBlob = await createFromImg(d.img);
+                                    URL.revokeObjectURL(d.url);
+                                }
+                                if (thumbBlob) break; // 성공하면 루프 종료
+                            } catch (e) { }
+                        }
+                    }
+                    // 생성된 2분할 썸네일 저장
+                    if (thumbBlob) {
+                        saveToCache(key, thumbBlob);
+                        updateCacheStatus();
+                    }
+                } catch (e) { console.warn("Thumb Gen Error", e); }
+            }
+
+            // 화면 표시 (2분할 혹은 단일)
+            if (thumbBlob) {
+                el.innerHTML = `<div class="badge-type badge-zip">ZIP</div><img src="${URL.createObjectURL(thumbBlob)}" class="thumb-img loaded">`;
+            } else {
+                el.innerText = "Err";
+            }
+
+            // ==========================================
+            // 2단계: 4분할 프리뷰 백그라운드 생성 (몰래 저장)
+            // ==========================================
+            // 썸네일 표시가 끝난 후, CPU 여유가 있을 때 실행
+            setTimeout(async () => {
+                // 이미 4분할 캐시가 있는지 확인 (중복 생성 방지)
+                const cachedPreview = await getFromCache(previewKey);
+                if (!cachedPreview) {
+                    // 캐시가 없으면 백그라운드에서 생성 시작
+                    // await를 쓰지 않고 비동기로 던져놓음 (UI 멈춤 방지)
+                    generateZipStrip(file).then(stripBlob => {
+                        if (stripBlob) {
+                            saveToCache(previewKey, stripBlob);
+                            console.log(`[Auto-Cache] Preview created for ${file.name}`);
+                        }
+                    }).catch(e => { /* 백그라운드 에러는 무시 */ });
+                }
+            }, 500); // 0.5초 뒤 시작 (스크롤 버벅임 방지)
+        }
+        async function createFromImg(img) {
+            return new Promise(resolve => {
+                const cvs = document.createElement('canvas');
+                const scale = 240 / img.width;
+                cvs.width = 240; cvs.height = img.height * scale;
+                cvs.getContext('2d').drawImage(img, 0, 0, cvs.width, cvs.height);
+                cvs.toBlob(b => resolve(b), 'image/jpeg', 0.7);
+            });
         }
 
         // === ZIP Preview Modal ===
